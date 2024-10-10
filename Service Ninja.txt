@@ -41,6 +41,12 @@ function Report-Progress {
     Write-Progress -Activity $activity -Status $status -PercentComplete $percentComplete
 }
 
+# Function to check if a service exists
+function Service-Exists {
+    param ([string]$serviceName)
+    return Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+}
+
 # Function to stop services
 function Stop-Services {
     param ([string[]]$services)
@@ -48,19 +54,24 @@ function Stop-Services {
     $counter = 0
     $totalServices = $services.Count
     foreach ($service in $services) {
-        try {
-            $svc = Get-Service -Name $service -ErrorAction SilentlyContinue
-            if ($svc.Status -eq 'Running') {
-                Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
-                Write-Host "Stopped service: $service"
-                Write-Log "Stopped service: $service"
-            } else {
-                Write-Host "Service not running: $service"
-                Write-Log "Service not running: $service"
+        if (Service-Exists $service) {
+            try {
+                $svc = Get-Service -Name $service
+                if ($svc.Status -eq 'Running') {
+                    Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
+                    Write-Host "Stopped service: $service"
+                    Write-Log "Stopped service: $service"
+                } else {
+                    Write-Host "Service not running: $service"
+                    Write-Log "Service not running: $service"
+                }
+            } catch {
+                Write-Host "Error stopping service: $service. Error: $_"
+                Write-Log "Error stopping service: $service. Error: $_"
             }
-        } catch {
-            Write-Host "Service not found or cannot be stopped: $service"
-            Write-Log "Service not found or cannot be stopped: $service"
+        } else {
+            Write-Log "Service not found: $service"
+            Write-Host "Service not found: $service"
         }
         $counter++
         Report-Progress "Stopping Services" "Processing $service" (($counter / $totalServices) * 100)
@@ -74,13 +85,18 @@ function Disable-Services {
     $counter = 0
     $totalServices = $services.Count
     foreach ($service in $services) {
-        try {
-            Set-Service -Name $service -StartupType Disabled -ErrorAction SilentlyContinue
-            Write-Host "Disabled service: $service"
-            Write-Log "Disabled service: $service"
-        } catch {
-            Write-Host "Service not found or cannot be disabled: $service"
-            Write-Log "Service not found or cannot be disabled: $service"
+        if (Service-Exists $service) {
+            try {
+                Set-Service -Name $service -StartupType Disabled -ErrorAction SilentlyContinue
+                Write-Host "Disabled service: $service"
+                Write-Log "Disabled service: $service"
+            } catch {
+                Write-Host "Service not found or cannot be disabled: $service. Error: $_"
+                Write-Log "Service not found or cannot be disabled: $service. Error: $_"
+            }
+        } else {
+            Write-Log "Service not found: $service"
+            Write-Host "Service not found: $service"
         }
         $counter++
         Report-Progress "Disabling Services" "Processing $service" (($counter / $totalServices) * 100)
@@ -91,10 +107,14 @@ function Disable-Services {
 function Backup-Services {
     $backup = @()
     foreach ($service in $insecureServices + $nonEssentialServices + $obsoleteServices) {
-        try {
-            $svc = Get-Service -Name $service -ErrorAction SilentlyContinue
-            $backup += [PSCustomObject]@{ Name = $service; Status = $svc.Status.ToString(); StartType = (Get-WmiObject -Class Win32_Service -Filter "Name='$service'").StartMode }
-        } catch {
+        if (Service-Exists $service) {
+            try {
+                $svc = Get-Service -Name $service
+                $backup += [PSCustomObject]@{ Name = $service; Status = $svc.Status.ToString(); StartType = (Get-WmiObject -Class Win32_Service -Filter "Name='$service'").StartMode }
+            } catch {
+                Write-Log "Service not found: $service"
+            }
+        } else {
             Write-Log "Service not found: $service"
         }
     }
@@ -117,37 +137,53 @@ function Run-Health-Check {
     Restart-CriticalServices
 }
 
+# Function to check and ensure dependent services are running
+function Ensure-DependentServicesRunning {
+    param ([string]$serviceName)
+    $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+
+    if ($svc -and $svc.DependentServices.Count -gt 0) {
+        foreach ($depSvc in $svc.DependentServices) {
+            if ($depSvc.Status -ne 'Running') {
+                Start-Service -Name $depSvc.Name -ErrorAction SilentlyContinue
+                Write-Log "Started dependent service: $($depSvc.Name)"
+                Write-Host "Started dependent service: $($depSvc.Name)"
+            }
+        }
+    }
+}
+
 # Function to restart or enable critical services if necessary
 function Restart-CriticalServices {
     Write-Host "Checking and restarting critical services if needed..."
     foreach ($service in $criticalServices) {
-        try {
-            $svc = Get-Service -Name $service -ErrorAction SilentlyContinue
+        if (Service-Exists $service) {
+            try {
+                Ensure-DependentServicesRunning -serviceName $service
+                
+                $svc = Get-Service -Name $service
+                # Set the startup type to Automatic if it's not already
+                if ($svc.StartType -ne 'Automatic') {
+                    Set-Service -Name $service -StartupType Automatic -ErrorAction SilentlyContinue
+                    Write-Log "Set startup type to Automatic for: $service"
+                }
 
-            # Check if the service exists
-            if ($svc -eq $null) {
-                Write-Log "Service not found: $service"
-                Write-Host "Service not found: $service"
-                continue
+                # Check and restart the service if it's not running
+                if ($svc.Status -ne 'Running') {
+                    Start-Service -Name $service -ErrorAction Stop
+                    Write-Log "Started critical service: $service"
+                    Write-Host "Started critical service: $service"
+                } else {
+                    Write-Host "Critical service already running: $service"
+                }
+
+            } catch {
+                Write-Log "Failed to restart or enable critical service: $service. Error: $_"
+                Write-Host "Failed to restart or enable critical service: $service. Error: $_"
             }
-
-            # Set the startup type to Automatic if it's not already
-            if ($svc.StartType -ne 'Automatic') {
-                Set-Service -Name $service -StartupType Automatic -ErrorAction SilentlyContinue
-                Write-Log "Set startup type to Automatic for: $service"
-            }
-
-            # Check and restart the service if it's not running
-            if ($svc.Status -ne 'Running') {
-                Start-Service -Name $service -Force -ErrorAction Stop
-                Write-Log "Force started critical service: $service"
-                Write-Host "Force started critical service: $service"
-            }
-
-        } catch {
-            # Handle dependency errors
-            Write-Log "Failed to restart or enable critical service: $service. Error: $_"
-            Write-Host "Failed to restart or enable critical service: $service. Error: $_"
+        } else {
+            Write-Log "Service not found: $service"
+            Write-Host "Service not found: $service"
         }
     }
 }
@@ -157,14 +193,9 @@ function Check-Missing-Services {
     param ([string[]]$services)
     Write-Host "Checking for missing services..."
     foreach ($service in $services) {
-        try {
-            $svc = Get-Service -Name $service -ErrorAction SilentlyContinue
-            if (!$svc) {
-                Write-Log "Service missing or not installed: $service"
-                Write-Host "Service missing or not installed: $service"
-            }
-        } catch {
-            Write-Log "Failed to retrieve service info: $service"
+        if (-not (Service-Exists $service)) {
+            Write-Log "Service missing or not installed: $service"
+            Write-Host "Service missing or not installed: $service"
         }
     }
 }
