@@ -1,0 +1,12 @@
+How to Use the Script:
+Backup File: Ensure the C:\ServiceNinjaBackup.csv backup file exists, created by your previous script.
+Run with Administrator Privileges: Since this script modifies service states, it needs to be run with administrator privileges.
+Log File: The restoration process logs all actions to C:\ServiceNinjaRestoreLog.txt.
+How to Run:
+Copy the script to a .ps1 file (e.g., ServiceRestore.ps1).
+Open PowerShell as Administrator.
+Run the script:
+powershell
+Copy code
+.\ServiceRestore.ps1
+This script will restore the services to their original states using the backup file.
