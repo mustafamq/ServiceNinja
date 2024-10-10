@@ -123,16 +123,31 @@ function Restart-CriticalServices {
     foreach ($service in $criticalServices) {
         try {
             $svc = Get-Service -Name $service -ErrorAction SilentlyContinue
+
+            # Check if the service exists
+            if ($svc -eq $null) {
+                Write-Log "Service not found: $service"
+                Write-Host "Service not found: $service"
+                continue
+            }
+
+            # Set the startup type to Automatic if it's not already
+            if ($svc.StartType -ne 'Automatic') {
+                Set-Service -Name $service -StartupType Automatic -ErrorAction SilentlyContinue
+                Write-Log "Set startup type to Automatic for: $service"
+            }
+
+            # Check and restart the service if it's not running
             if ($svc.Status -ne 'Running') {
-                Start-Service -Name $service -Force -ErrorAction SilentlyContinue
+                Start-Service -Name $service -Force -ErrorAction Stop
                 Write-Log "Force started critical service: $service"
                 Write-Host "Force started critical service: $service"
             }
-            Set-Service -Name $service -StartupType Automatic -ErrorAction SilentlyContinue
-            Write-Log "Ensured $service is set to Automatic startup"
+
         } catch {
-            Write-Log "Failed to restart or enable critical service: $service"
-            Write-Host "Failed to restart or enable critical service: $service"
+            # Handle dependency errors
+            Write-Log "Failed to restart or enable critical service: $service. Error: $_"
+            Write-Host "Failed to restart or enable critical service: $service. Error: $_"
         }
     }
 }
