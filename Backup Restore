@@ -1,0 +1,65 @@
+# Define log file path for restoration logs
+$restoreLogFilePath = "C:\ServiceNinjaRestoreLog.txt"
+
+# Function to write log for restore process
+function Write-RestoreLog {
+    param ([string]$message)
+    Add-Content -Path $restoreLogFilePath -Value "$(Get-Date) : $message"
+}
+
+# Function to check if a service exists
+function Service-Exists {
+    param ([string]$serviceName)
+    return Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+}
+
+# Function to restore service states from the backup file
+function Restore-Services {
+    $backupFile = "C:\ServiceNinjaBackup.csv"
+    if (Test-Path $backupFile) {
+        Write-Host "Restoring services from backup..."
+        Write-RestoreLog "Restoring services from backup file: $backupFile"
+
+        $backup = Import-Csv -Path $backupFile
+        foreach ($service in $backup) {
+            if (Service-Exists $service.Name) {
+                try {
+                    # Restore startup type
+                    Set-Service -Name $service.Name -StartupType $service.StartType
+                    Write-RestoreLog "Restored startup type for service: $($service.Name) to $($service.StartType)"
+                    
+                    # Restore running status
+                    if ($service.Status -eq 'Running') {
+                        Start-Service -Name $service.Name -ErrorAction SilentlyContinue
+                        Write-Log "Started service: $($service.Name)"
+                        Write-Host "Started service: $($service.Name)"
+                    } else {
+                        Stop-Service -Name $service.Name -ErrorAction SilentlyContinue
+                        Write-Log "Stopped service: $($service.Name)"
+                        Write-Host "Stopped service: $($service.Name)"
+                    }
+                } catch {
+                    Write-RestoreLog "Failed to restore service: $($service.Name). Error: $_"
+                    Write-Host "Failed to restore service: $($service.Name). Error: $_"
+                }
+            } else {
+                Write-RestoreLog "Service not found: $($service.Name)"
+                Write-Host "Service not found: $($service.Name)"
+            }
+        }
+    } else {
+        Write-Host "Backup file not found: $backupFile"
+        Write-RestoreLog "Backup file not found: $backupFile"
+    }
+}
+
+# Main function to start the restore process
+function Main {
+    Write-Host "Starting service restoration..."
+    Restore-Services
+    Write-Host "Service restoration completed. Detailed log saved at $restoreLogFilePath"
+    Write-RestoreLog "Service restoration completed."
+}
+
+# Run the main function
+Main
